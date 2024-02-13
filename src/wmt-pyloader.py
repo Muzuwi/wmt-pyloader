@@ -63,7 +63,7 @@ def identify_chip_type_magic(err: int, chipid: int):
         return fallback
 
 
-def main() -> int:
+def do_loader() -> int:
     try:
         fd = open(DEV_NODE, "wb")
     except:
@@ -176,8 +176,23 @@ def main() -> int:
         print(f"wmt_pyloader: chown({PROC_WMT_AEE}, 2000, 1000) failed: {e}")
         return 1
 
-    print("wmt_pyloader: Done!")
 
+def do_launcher() -> int:
+    return 0
+
+
+def main() -> int:
+    err = do_loader()
+    if err != 0:
+        print(f"wmt_pyloader: Loader step returned err({hex(err)})")
+        return err
+
+    err = do_launcher()
+    if err != 0:
+        print(f"wmt_pyloader: Launcher step returned err({hex(err)})")
+        return err
+
+    print("wmt_pyloader: Done!")
     return 0
 
 
