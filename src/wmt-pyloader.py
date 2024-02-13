@@ -2,6 +2,7 @@
 import fcntl
 import struct
 import os
+import argparse
 
 DEV_NODE = "/dev/wmtdetect"
 PROC_WMT_DBG = "/proc/driver/wmt_dbg"
@@ -182,10 +183,17 @@ def do_launcher() -> int:
 
 
 def main() -> int:
-    err = do_loader()
-    if err != 0:
-        print(f"wmt_pyloader: Loader step returned err({hex(err)})")
-        return err
+    parser = argparse.ArgumentParser(prog="wmt_pyloader",
+                                     description="Mediatek WiFi Loader")
+    parser.add_argument("--skip-loader", action="store_true", default=False,
+                        dest='skip_loader', help='Do not perform Loader step')
+    args = parser.parse_args()
+
+    if not args.skip_loader:
+        err = do_loader()
+        if err != 0:
+            print(f"wmt_pyloader: Loader step returned err({hex(err)})")
+            return err
 
     err = do_launcher()
     if err != 0:
