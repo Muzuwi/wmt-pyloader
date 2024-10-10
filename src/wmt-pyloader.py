@@ -3,8 +3,11 @@ import fcntl
 import struct
 import os
 import argparse
+import time
+import threading
 
 DEV_NODE = "/dev/wmtdetect"
+LOADER_NODE = "/dev/stpwmt"
 PROC_WMT_DBG = "/proc/driver/wmt_dbg"
 PROC_WMT_AEE = "/proc/driver/wmt_aee"
 CHIPID = "-1"
@@ -26,6 +29,13 @@ COMBO_IOCTL_EXT_CHIP_PWR_OFF = (IOCTL_BASE_R + 7) & 0xFFFFFFFF
 COMBO_IOCTL_DO_SDIO_AUDOK = (IOCTL_BASE_R + 8) & 0xFFFFFFFF
 COMBO_IOCTL_GET_ADIE_CHIP_ID = (IOCTL_BASE_R + 9) & 0xFFFFFFFF
 COMBO_IOCTL_CONNSYS_SOC_HW_INIT = (IOCTL_BASE_R + 10) & 0xFFFFFFFF
+
+# FIXME: Made up names
+IOCTL_STPWMT_PATCH = 0xC008A015
+IOCTL_STPWMT_CONFIGURE_MODE = 0x4004A005
+IOCTL_STPWMT_POWER_ON = 0x4004A007
+IOCTL_STPWMT_CONFIGURE_FINI = 0x4004A00D
+IOCTL_STPWMT_DUMP_FIRMWARE_LOG = 0x8004A01D
 
 # Replacements for things that are passed via props
 persist_vendor_connsys_chipid = None
@@ -194,7 +204,101 @@ def do_loader() -> int:
 
 
 def _launcher_pwr_on_conn_thread(stpwmt_fd: int, magic_flag: bool):
+    print(f"Entering connsys power-on flow! Magic Flag={magic_flag}")
+    magic_value = 2 if magic_flag else 1
+    count = 0
+    while count < 0x14:
+        err = do_ioctl(stpwmt_fd, IOCTL_STPWMT_POWER_ON, magic_value)
+        if err == 0:
+            print("Power-on completed, closing..")
+            break
+        do_ioctl(stpwmt_fd, IOCTL_STPWMT_POWER_ON, 0)
+        print(f"Power-on failed! Retrying in 1s...")
+        time.sleep(1.0)
+        count += 1
+
+
+def _launcher_response_thread(stpwmt_fd: int):
+    import select
+
+    print("Loader: waiting for patch request..")
+    while True:
+        r, _, _ = select.select([stpwmt_fd], [], [])
+        if stpwmt_fd not in r:
+            continue
+
+        print("Loader: stpwmt contains data!")
+        data = os.read(stpwmt_fd, 256)
+        print(f"Loader: read data={data}")
+        # FIXME: Implement!
+        break
+
+
 def do_launcher() -> int:
+    # O_CREAT | O_RDWR
+    fd = os.open(LOADER_NODE, 0x102)
+    if fd < 0:
+        print(f"Failed to open {LOADER_NODE}")
+        print(f"Hint: {LOADER_NODE} appears after performing the Loader step.")
+        return 1
+
+    used_chipid = None
+    while True:
+        if persist_vendor_connsys_chipid is not None:
+            used_chipid = persist_vendor_connsys_chipid
+            break
+        print(f"WARNING: Chip ID was not set! Trying to retrieve chip ID from device")
+        err = do_ioctl(fd, 0x8004A016, 0)
+        if err == -1:
+            print(
+                f"WARNING: Get chip ID from {LOADER_NODE} failed! Retrying in 300ms.."
+            )
+            time.sleep(0.3)
+            continue
+        used_chipid = err
+        break
+
+    print(f"wmt_pyloader: Using chip ID: {hex(used_chipid)}")
+
+    weird_chip_id = (used_chipid - 0x6620) >> 1
+    check_id = weird_chip_id | (used_chipid << 0x1F)
+    print(f"check_id: {hex(check_id)}")
+    if check_id < 10 and ((1 << (used_chipid) & 0x1F) & 0x311) != 0:
+        stp_mode = 4
+        print("wmt_pyloader: FIXME: Unimplemented branch!")
+        return 1
+    else:
+        stp_mode = 3
+    fm_mode = 2
+
+    baudrate = 4000000
+    g_wmt_cfg_name = "WMT_SOC.cfg"
+    patch_path = "/lib/firmware"
+
+    if patch_path is None:
+        print("wmt_pyloader: FIXME: Unimplemented branch! patch_path == null")
+        return 1
+
+    config = (baudrate << 8) | ((fm_mode & 0xF) << 4) | (stp_mode & 0xF)
+    do_ioctl(fd, IOCTL_STPWMT_PATCH, g_wmt_cfg_name.encode())
+    do_ioctl(fd, IOCTL_STPWMT_CONFIGURE_MODE, config)
+    do_ioctl(fd, IOCTL_STPWMT_CONFIGURE_FINI)
+
+    # FIXME: Magic flag passed from CLI arguments changes ioctl value for power on
+    t = threading.Thread(
+        target=_launcher_pwr_on_conn_thread,
+        args=(
+            fd,
+            False,
+        ),
+    )
+    t.start()
+
+    # TODO: Log debug thread (but won't work on connsys)
+
+    t = threading.Thread(target=_launcher_response_thread, args=(fd,))
+    t.start()
+
     return 0
 
 
