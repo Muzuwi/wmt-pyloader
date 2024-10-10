@@ -27,6 +27,9 @@ COMBO_IOCTL_DO_SDIO_AUDOK = (IOCTL_BASE_R + 8) & 0xFFFFFFFF
 COMBO_IOCTL_GET_ADIE_CHIP_ID = (IOCTL_BASE_R + 9) & 0xFFFFFFFF
 COMBO_IOCTL_CONNSYS_SOC_HW_INIT = (IOCTL_BASE_R + 10) & 0xFFFFFFFF
 
+# Replacements for things that are passed via props
+persist_vendor_connsys_chipid = None
+
 
 def identify_chip_type_magic(err: int, chipid: int):
     """I have no idea what this does, it seems important
@@ -65,22 +68,28 @@ def identify_chip_type_magic(err: int, chipid: int):
         return fallback
 
 
+def do_ioctl(fd, ioctl: int, arg=0) -> int:
+    # Python is being a bit too clever and throws an exception based on the status code
+    # The driver of course re-uses some values for it's own custom statuses.
+    try:
+        err = fcntl.ioctl(fd, ioctl, arg)
+    except OSError as e:
+        err = -e.errno
+    if isinstance(err, bytes):
+        print(f"wmt_pyloader: ioctl({hex(ioctl)} bytes: {err}")
+        return err
+    print(f"wmt_pyloader: ioctl({hex(ioctl)}) returned err({hex(err)})")
+    return err
+
+
 def do_loader() -> int:
+    global persist_vendor_connsys_chipid
+
     try:
         fd = open(DEV_NODE, "wb")
     except:
         print(f"Failed to open {DEV_NODE}")
         return 1
-
-    def do_ioctl(fd, ioctl: int, arg = 0) -> int:
-        # Python is being a bit too clever and throws an exception based on the status code
-        # The driver of course re-uses some values for it's own custom statuses.
-        try:
-            err = fcntl.ioctl(fd, ioctl, arg)
-        except OSError as e:
-            err = -e.errno
-        print(f"wmt_pyloader: ioctl({hex(ioctl)}) returned err({hex(err)})")
-        return err
 
     # HW initialization
     err = do_ioctl(fd, COMBO_IOCTL_CONNSYS_SOC_HW_INIT)
@@ -144,6 +153,7 @@ def do_loader() -> int:
     err = do_ioctl(fd, COMBO_IOCTL_SET_CHIP_ID, chipid & 0xFFFFFFFF)
     chip_type = identify_chip_type_magic(err, chipid & 0xFFFFFFFF)
 
+    persist_vendor_connsys_chipid = chipid & 0xFFFFFFFF
     if chip_type is None:
         # Doesn't look fatal?
         print(f"wmt_pyloader: Invalid loaderfd: {hex(err)}")
@@ -183,6 +193,7 @@ def do_loader() -> int:
     return 0
 
 
+def _launcher_pwr_on_conn_thread(stpwmt_fd: int, magic_flag: bool):
 def do_launcher() -> int:
     return 0
 
