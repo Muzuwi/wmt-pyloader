@@ -1,10 +1,12 @@
 import fcntl
+import logging
 import struct
 import os
 import argparse
 import time
 import threading
 import glob
+from typing import Optional
 import patch
 
 
@@ -59,8 +61,84 @@ class WMTCHIN:
 
 
 WMT_DEV = "/dev/stpwmt"
+WMT_COMAMND_SRH_PATCH = b"srh_patch"
 WMT_COMMAND_SRH_ROM_PATCH = b"srh_rom_patch"
 WMT_PATCH_LOOKUP_DIRECTORY = "/lib/firmware/"
+ROM_PREFIXES = {
+    "ROMv1": [0x6572, 0x6582, 0x6592, 0x6595],
+    "ROMv2": [0x8127],
+    "ROMv2_lm": [
+        0x321,
+        0x326,
+        0x335,
+        0x337,
+        0x6735,
+        0x6739,
+        0x6752,
+        0x6755,
+        0x6757,
+        0x6763,
+    ],
+    "ROMv3": [0x279],
+    "ROMv4": [0x507, 0x6759],
+    "ROMv4_be": [0x6771, 0x6775],
+    "soc1_0": [0x6761, 0x6765, 0x6768, 0x6785, 0x3967, 0x8163],
+    "soc2_0": [0x6779, 0x6853, 0x6873],
+}
+CHIP_RANGES_ROMv1 = range(0x6570, 0x6593)
+
+
+def get_patch_prefix(chip_id: int) -> Optional[str]:
+    """Determines the patch prefix for srh_patch commands."""
+    for prefix, ids in ROM_PREFIXES.items():
+        if chip_id in ids:
+            return prefix
+
+    if chip_id in CHIP_RANGES_ROMv1:
+        if chip_id in ROM_PREFIXES["ROMv1"]:
+            return "ROMv1"
+        if chip_id in ROM_PREFIXES["ROMv2_lm"]:
+            return "ROMv2_lm"
+        if chip_id == 0x8127:
+            return "ROMv2"
+        if chip_id in [0x3967, 0x8163]:
+            return "soc1_0"
+        if chip_id in [0x6853, 0x6873]:
+            return "soc2_0"
+
+    known_prefix_ids = set(range(0x6736, 0x6797))
+    if chip_id in known_prefix_ids:
+        return f"mt{chip_id:x}"
+
+    return None
+
+
+def get_patch_suffix(chip_id: int) -> Optional[str]:
+    # TODO: There's more logic to determining the suffix of the patch file.
+    # This part uses the vendor.connsys.adie.chipid Android property, not
+    # sure how that translates to the IDs you get from ioctl's.
+    suffix = "1_1"
+    return suffix
+
+
+def create_set_patch_request(patchinfo: bytes, patchfile: str) -> bytes:
+    ioctlbuf = bytes()
+    # 0..3: "downloadSeq"
+    ioctlbuf += struct.pack("<L", patchinfo[0] & 0xF)
+    # 4..7: "addRess"
+    # lowest byte is set to 0
+    address = struct.pack(
+        "<L",
+        0x0 | patchinfo[1] << 8 | patchinfo[2] << 16 | patchinfo[3] << 24,
+    )
+    ioctlbuf += address
+    # 8..264: "patchName"
+    patchnameBytes = patchfile.encode()
+    if len(patchnameBytes) > 255:
+        raise Exception(f"Patch name exceeds max size ({len(patchnameBytes) > 255})")
+    patchnameBytes += b"\x00" * (256 - len(patchnameBytes))
+    ioctlbuf += patchnameBytes
+    return ioctlbuf
 
 
 class Launcher:
@@ -147,6 +225,9 @@ class Launcher:
                 if data == WMT_COMMAND_SRH_ROM_PATCH:
                     self._handle_srh_rom_patch()
                     response = b"ok"
+                elif data == WMT_COMAMND_SRH_PATCH:
+                    self._handle_srh_patch()
+                    response = b"ok"
                 else:
                     print(f"WARNING: Loader: unknown command={data}")
 
@@ -173,10 +254,7 @@ class Launcher:
             prefix = "soc2_2"
         elif chip_id == 0x6833:
             prefix = "soc2_2"
-        # TODO: There's more logic to determining the suffix of the patch file.
-        # This part uses the vendor.connsys.adie.chipid Android property, not
-        # sure how that translates to the IDs you get from ioctl's.
-        suffix = "1_1"
+        suffix = get_patch_suffix(chip_id)
 
         patchglob = f"{prefix}_ram_*_{suffix}*"
         print(f"srh_rom_patch: Looking for patch using glob: {patchglob}")
@@ -255,6 +333,55 @@ class Launcher:
             if err != 0:
                 raise Exception(
                     f"srh_rom_patch: WMT_IOCTL_SET_ROM_PATCH_INFO failed (err={err})"
+                )
+
+    def _handle_srh_patch(self):
+        chip_id = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_CHIPID)
+        fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_FWVER)
+        print(f"srh_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
+
+        prefix = get_patch_prefix(chip_id)
+        if prefix is None:
+            prefix = f"mt{{chip_id:x}}"
+        prefix = f"{prefix}_patch"
+        suffix = get_patch_suffix(chip_id)
+
+        patchglob = f"{prefix}*{suffix}*"
+        print(f"srh_patch: Looking for patch using glob: {patchglob}")
+
+        paths = glob.glob(patchglob, root_dir=WMT_PATCH_LOOKUP_DIRECTORY)
+        if len(paths) == 0:
+            raise Exception("Failed to find patch")
+
+        patch_count_set = False
+        fname = paths[0]
+        for fname in paths:
+            path = os.path.join(WMT_PATCH_LOOKUP_DIRECTORY, fname)
+            print(f"srh_patch: Considering patch {path}")
+            with open(path, "rb") as f:
+                patchbytes = f.read()
+            print(f"srh_patch: Read patch file length: {len(patchbytes)}")
+            patchinfo = patch.get_patch_info(patchbytes)[:4]
+            patchver = patch.get_patch_version(patchbytes)
+            print(f"srh_patch: patchinfo={patchinfo}")
+            print(f"srh_patch: patchver={patchver}")
+            if patchver != fwver:
+                raise Exception(
+                    f"Patch version mismatch... expected {patchver} got {fwver}"
+                )
+            # The first globbed patch determines the amount of patches to come.
+            # Presumably all of them would have a matching number here.
+            if not patch_count_set:
+                err = do_ioctl(self.fd, WMT_IOCTL_SET_PATCH_NUM, patchinfo[0] >> 4)
+                if err != 0:
+                    raise Exception(f"Failed to set patch count (err={err})")
+                patch_count_set = True
+
+            req = create_set_patch_request(patchinfo, fname)
+            err = do_ioctl(self.fd, WMT_IOCTL_SET_PATCH_INFO, req)
+            if err != 0:
+                raise Exception(
+                    f"srh_patch: WMT_IOCTL_SET_PATCH_INFO failed (err={err})"
                 )
 
 

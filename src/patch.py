@@ -55,7 +55,7 @@ def get_wifi_fw_ver(patchbytes: bytes) -> str:
     return patchbytes[0:0x10].decode()
 
 
-def get_patch_info(patchbytes: bytes) -> int:
+def get_patch_info(patchbytes: bytes) -> bytes:
     # return struct.unpack("<Q", patchbytes[0x18 : (0x18 + 8)])[0]
     patchinfo = patchbytes[0x18 : (0x18 + 8)]
     if patchinfo[0] != 0x11:
