@@ -33,13 +33,17 @@ def iowr(type: int, nr: int, size: str):
     return ioc(_IOC_READ | _IOC_WRITE, type, nr, size)
 
 
-def do_ioctl(fd, ioctl: int, arg=0) -> int:
+def do_ioctl(fd, ioctl: int, arg: int | bytes = 0) -> int:
     import fcntl
 
     # Python is being a bit too clever and throws an exception based on the status code
     # The driver of course re-uses some values for it's own custom statuses.
     try:
-        err = fcntl.ioctl(fd, ioctl, arg)
+        if isinstance(arg, bytes):
+            buf = bytearray(arg)
+            err = fcntl.ioctl(fd, ioctl, buf)
+        else:
+            err = fcntl.ioctl(fd, ioctl, arg)
     except OSError as e:
         err = -e.errno
     if isinstance(err, bytes):
