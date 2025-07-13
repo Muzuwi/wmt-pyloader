@@ -4,6 +4,8 @@ import os
 import argparse
 import time
 import threading
+import glob
+import patch
 
 
 from ioctl import do_ioctl, ior, iow, iowr
@@ -40,6 +42,12 @@ WMT_IOCTL_SET_ACTIVE_PATCH_VERSION = ior(WMT_IOC_MAGIC, 40, "char*")
 WMT_IOCTL_GET_ACTIVE_PATCH_VERSION = ior(WMT_IOC_MAGIC, 41, "char*")
 WMT_IOCTL_GET_DIRECT_PATH_EMI_SIZE = ior(WMT_IOC_MAGIC, 42, "unsigned int")
 
+WMT_CHIPINFO_GET_CHIPID = 0
+WMT_CHIPINFO_GET_HWVER = 1
+WMT_CHIPINFO_GET_FWVER = 2
+WMT_CHIPINFO_GET_IPVER = 3
+WMT_CHIPINFO_GET_CHIP_TYPE = 4
+
 
 class WMTCHIN:
     CHIPID = 0
@@ -51,11 +59,14 @@ class WMTCHIN:
 
 
 WMT_DEV = "/dev/stpwmt"
+WMT_COMMAND_SRH_ROM_PATCH = b"srh_rom_patch"
+WMT_PATCH_LOOKUP_DIRECTORY = "/lib/firmware/"
 
 
 class Launcher:
     def __init__(self) -> None:
         self.fd = -1
+        self.rom_patch_infos = []
 
     def run(self) -> int:
         self.fd = os.open(WMT_DEV, os.O_CREAT | os.O_RDWR)
@@ -131,9 +142,120 @@ class Launcher:
 
             print("Loader: stpwmt contains data!")
             data = os.read(self.fd, 256)
-            print(f"Loader: read data={data}")
-            # FIXME: Implement!
-            break
+            response = b"fail"
+            try:
+                if data == WMT_COMMAND_SRH_ROM_PATCH:
+                    self._handle_srh_rom_patch()
+                    response = b"ok"
+                else:
+                    print(f"WARNING: Loader: unknown command={data}")
+
+            except Exception as e:
+                import traceback
+
+                print("WARNING: Command handling failed with:", e)
+                traceback.print_exception(e)
+
+            print(f"Loader: response={response}")
+            os.write(self.fd, response)
+
+    def _handle_srh_rom_patch(self):
+        self.rom_patch_infos.clear()
+
+        chip_id = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_CHIPID)
+        fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_FWVER)
+        print(f"srh_rom_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
+
+        prefix = "soc1_0"
+        if chip_id == 0x6779 or chip_id == 0x6873 or chip_id == 0x6853:
+            prefix = "soc2_0"
+        elif chip_id == 0x6781:
+            prefix = "soc2_2"
+        elif chip_id == 0x6833:
+            prefix = "soc2_2"
+        # TODO: There's more logic to determining the suffix of the patch file.
+        # This part uses the vendor.connsys.adie.chipid Android property, not
+        # sure how that translates to the IDs you get from ioctl's.
+        suffix = "1_1"
+
+        patchglob = f"{prefix}_ram_*_{suffix}*"
+        print(f"srh_rom_patch: Looking for patch using glob: {patchglob}")
+
+        paths = glob.glob(patchglob, root_dir=WMT_PATCH_LOOKUP_DIRECTORY)
+        if len(paths) == 0:
+            raise Exception("Failed to find patch")
+
+        for fname in paths:
+            path = os.path.join(WMT_PATCH_LOOKUP_DIRECTORY, fname)
+            print(f"srh_rom_patch: Considering patch {path}")
+
+            with open(path, "rb") as f:
+                patchbytes = f.read()
+
+            if "ram_bt" in fname:
+                btver = patch.get_bt_fw_ver(patchbytes)
+                print("srh_rom_patch: BT firmware version:", btver)
+            elif "ram_wifi" in fname:
+                wifiver = patch.get_wifi_fw_ver(patchbytes)
+                print("srh_rom_patch: WiFi firmware version:", wifiver)
+            elif "ram_mcu" in fname:
+                print("srh_rom_patch: MCU RAM patch")
+            else:
+                print("WARNING: Unknown patch file!")
+                continue
+
+            print(f"srh_rom_patch: Read patch file length: {len(patchbytes)}")
+            patchinfo = patch.get_patch_info(patchbytes)
+            patchver = patch.get_patch_version(patchbytes)
+            print(f"srh_rom_patch: patchinfo={patchinfo}")
+            print(f"srh_rom_patch: patchver={patchver}")
+            if patchver != fwver:
+                raise Exception(
+                    f"Patch version mismatch... expected {patchver} got {fwver}"
+                )
+            self._set_rom_patch_info(patchinfo, fname)
+
+        self._do_rom_patch_info()
+
+    def _set_rom_patch_info(self, patchinfo: bytes, patchfile: str):
+        if len(patchinfo) != 8:
+            raise Exception(
+                f"Invalid patchinfo length, expected 8 bytes, got {len(patchinfo)}"
+            )
+        if patchinfo[3] != 0xF0:
+            raise Exception("Patchinfo byte 3 check failed")
+        if patchinfo[7] >= 6:
+            raise Exception(f"Patch info type invalid! ({patchinfo[7]} >= 6)")
+
+        ioctlbuf = bytes()
+        # 0..3: "type"
+        ioctlbuf += struct.pack("<L", patchinfo[7])
+        # 4..7: "addRess"
+        # lowest byte is set to 0
+        address = struct.pack(
+            "<L",
+            0x0 | patchinfo[1] << 8 | patchinfo[2] << 16 | patchinfo[3] << 24,
+        )
+        ioctlbuf += address
+        # 8..264: "patchName"
+        patchnameBytes = patchfile.encode()
+        if len(patchnameBytes) > 255:
+            raise Exception(
+                f"Patch name exceeds max size ({len(patchnameBytes) > 255})"
+            )
+        patchnameBytes += b"\x00" * (256 - len(patchnameBytes))
+        ioctlbuf += patchnameBytes
+
+        self.rom_patch_infos.append(ioctlbuf)
+
+    def _do_rom_patch_info(self):
+        for patch in self.rom_patch_infos:
+            print("srh_rom_patch: WMT_IOCTL_SET_ROM_PATCH_INFO", patch)
+            err = do_ioctl(self.fd, WMT_IOCTL_SET_ROM_PATCH_INFO, patch)
+            if err != 0:
+                raise Exception(
+                    f"srh_rom_patch: WMT_IOCTL_SET_ROM_PATCH_INFO failed (err={err})"
+                )
 
 
 def do_launcher() -> int:
