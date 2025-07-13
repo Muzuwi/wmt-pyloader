@@ -87,7 +87,19 @@ ROM_PREFIXES = {
 CHIP_RANGES_ROMv1 = range(0x6570, 0x6593)
 
 
-def get_patch_prefix(chip_id: int) -> Optional[str]:
+def get_rom_patch_prefix(chip_id: int) -> str:
+    """Determine the ROM patch prefix for srh_rom_patch commands."""
+    prefix = "soc1_0"
+    if chip_id == 0x6779 or chip_id == 0x6873 or chip_id == 0x6853:
+        prefix = "soc2_0"
+    elif chip_id == 0x6781:
+        prefix = "soc2_2"
+    elif chip_id == 0x6833:
+        prefix = "soc2_2"
+    return prefix
+
+
+def get_patch_prefix(chip_id: int) -> str:
     """Determines the patch prefix for srh_patch commands."""
     for prefix, ids in ROM_PREFIXES.items():
         if chip_id in ids:
@@ -109,7 +121,7 @@ def get_patch_prefix(chip_id: int) -> Optional[str]:
     if chip_id in known_prefix_ids:
         return f"mt{chip_id:x}"
 
-    return None
+    raise Exception(f"Don't know any patch prefix for chip_id {chip_id:x}")
 
 
 def get_patch_suffix(chip_id: int) -> Optional[str]:
@@ -274,15 +286,8 @@ class Launcher:
         fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_FWVER)
         print(f"srh_rom_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
 
-        prefix = "soc1_0"
-        if chip_id == 0x6779 or chip_id == 0x6873 or chip_id == 0x6853:
-            prefix = "soc2_0"
-        elif chip_id == 0x6781:
-            prefix = "soc2_2"
-        elif chip_id == 0x6833:
-            prefix = "soc2_2"
+        prefix = get_rom_patch_prefix(chip_id)
         suffix = get_patch_suffix(chip_id)
-
         patchglob = f"{prefix}_ram_*_{suffix}*"
         print(f"srh_rom_patch: Looking for patch using glob: {patchglob}")
 
@@ -318,10 +323,7 @@ class Launcher:
         fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_FWVER)
         print(f"srh_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
 
-        prefix = get_patch_prefix(chip_id)
-        if prefix is None:
-            prefix = f"mt{{chip_id:x}}"
-        prefix = f"{prefix}_patch"
+        prefix = f"{get_patch_prefix(chip_id)}_patch"
         suffix = get_patch_suffix(chip_id)
 
         patchglob = f"{prefix}*{suffix}*"
