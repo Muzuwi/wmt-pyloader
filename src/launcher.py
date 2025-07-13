@@ -63,7 +63,6 @@ class WMTCHIN:
 WMT_DEV = "/dev/stpwmt"
 WMT_COMAMND_SRH_PATCH = b"srh_patch"
 WMT_COMMAND_SRH_ROM_PATCH = b"srh_rom_patch"
-WMT_PATCH_LOOKUP_DIRECTORY = "/lib/firmware/"
 ROM_PREFIXES = {
     "ROMv1": [0x6572, 0x6582, 0x6592, 0x6595],
     "ROMv2": [0x8127],
@@ -287,32 +286,19 @@ class Launcher:
         patchglob = f"{prefix}_ram_*_{suffix}*"
         print(f"srh_rom_patch: Looking for patch using glob: {patchglob}")
 
-        paths = glob.glob(patchglob, root_dir=WMT_PATCH_LOOKUP_DIRECTORY)
-        if len(paths) == 0:
-            raise Exception("Failed to find patch")
-
-        for fname in paths:
-            path = os.path.join(WMT_PATCH_LOOKUP_DIRECTORY, fname)
-            print(f"srh_rom_patch: Considering patch {path}")
-
-            with open(path, "rb") as f:
-                patchbytes = f.read()
-
-            if "ram_bt" in fname:
-                btver = patch.get_bt_fw_ver(patchbytes)
+        patches = patch.patchglob(patchglob)
+        for p in patches:
+            if "ram_bt" in p.filename:
+                btver = patch.find_bluetooth_fw_ver(p.contents)
                 print("srh_rom_patch: BT firmware version:", btver)
-            elif "ram_wifi" in fname:
-                wifiver = patch.get_wifi_fw_ver(patchbytes)
-                print("srh_rom_patch: WiFi firmware version:", wifiver)
-            elif "ram_mcu" in fname:
-                print("srh_rom_patch: MCU RAM patch")
             else:
-                print("WARNING: Unknown patch file!")
-                continue
+                print(
+                    "srh_rom_patch: Patch build:", patch.get_patch_build_id(p.contents)
+                )
 
-            print(f"srh_rom_patch: Read patch file length: {len(patchbytes)}")
-            patchinfo = patch.get_patch_info(patchbytes)
-            patchver = patch.get_patch_version(patchbytes)
+            print(f"srh_rom_patch: Read patch file length: {len(p.contents)}")
+            patchinfo = patch.get_patch_info(p.contents)
+            patchver = patch.get_patch_fwver(p.contents)
             print(f"srh_rom_patch: patchinfo={patchinfo}")
             print(f"srh_rom_patch: patchver={patchver}")
             if patchver != fwver:
@@ -320,7 +306,7 @@ class Launcher:
                     f"Patch version mismatch... expected {patchver} got {fwver}"
                 )
 
-            req = create_set_rom_patch_request(patchinfo, fname)
+            req = create_set_rom_patch_request(patchinfo, p.filename)
             err = do_ioctl(self.fd, WMT_IOCTL_SET_ROM_PATCH_INFO, req)
             if err != 0:
                 raise Exception(
@@ -341,20 +327,11 @@ class Launcher:
         patchglob = f"{prefix}*{suffix}*"
         print(f"srh_patch: Looking for patch using glob: {patchglob}")
 
-        paths = glob.glob(patchglob, root_dir=WMT_PATCH_LOOKUP_DIRECTORY)
-        if len(paths) == 0:
-            raise Exception("Failed to find patch")
-
         patch_count_set = False
-        fname = paths[0]
-        for fname in paths:
-            path = os.path.join(WMT_PATCH_LOOKUP_DIRECTORY, fname)
-            print(f"srh_patch: Considering patch {path}")
-            with open(path, "rb") as f:
-                patchbytes = f.read()
-            print(f"srh_patch: Read patch file length: {len(patchbytes)}")
-            patchinfo = patch.get_patch_info(patchbytes)[:4]
-            patchver = patch.get_patch_version(patchbytes)
+        patches = patch.patchglob(patchglob)
+        for p in patches:
+            patchinfo = patch.get_patch_info(p.contents)[:4]
+            patchver = patch.get_patch_fwver(p.contents)
             print(f"srh_patch: patchinfo={patchinfo}")
             print(f"srh_patch: patchver={patchver}")
             if patchver != fwver:
@@ -369,7 +346,7 @@ class Launcher:
                     raise Exception(f"Failed to set patch count (err={err})")
                 patch_count_set = True
 
-            req = create_set_patch_request(patchinfo, fname)
+            req = create_set_patch_request(patchinfo, p.filename)
             err = do_ioctl(self.fd, WMT_IOCTL_SET_PATCH_INFO, req)
             if err != 0:
                 raise Exception(
