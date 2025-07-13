@@ -1,11 +1,8 @@
-import fcntl
-import logging
 import struct
 import os
-import argparse
 import time
 import threading
-import glob
+import traceback
 from typing import Optional
 import patch
 
@@ -253,33 +250,31 @@ class Launcher:
     def _launcher_response_thread(self):
         import select
 
-        print("Loader: waiting for patch request..")
+        print("launcher: Waiting for patch requests..")
         while True:
             r, _, _ = select.select([self.fd], [], [])
             if self.fd not in r:
                 continue
 
-            print("Loader: stpwmt contains data!")
             data = os.read(self.fd, 256)
             response = b"fail"
             try:
-                if data == WMT_COMMAND_SRH_ROM_PATCH:
-                    self._handle_srh_rom_patch()
-                    response = b"ok"
-                elif data == WMT_COMAMND_SRH_PATCH:
-                    self._handle_srh_patch()
-                    response = b"ok"
-                else:
-                    print(f"WARNING: Loader: unknown command={data}")
-
+                self._handle_launcher_cmd(data)
+                response = b"ok"
             except Exception as e:
-                import traceback
-
                 print("WARNING: Command handling failed with:", e)
                 traceback.print_exception(e)
-
-            print(f"Loader: response={response}")
+            print(f"launcher: response={response}")
             os.write(self.fd, response)
+
+    def _handle_launcher_cmd(self, cmd: bytes):
+        print(f"launcher: Handling command={cmd}")
+        if cmd == WMT_COMMAND_SRH_ROM_PATCH:
+            self._handle_srh_rom_patch()
+        elif cmd == WMT_COMAMND_SRH_PATCH:
+            self._handle_srh_patch()
+        else:
+            raise Exception(f"Unknown launcher command={cmd}")
 
     def _handle_srh_rom_patch(self):
         chip_id = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_CHIPID)
