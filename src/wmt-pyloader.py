@@ -1,35 +1,25 @@
 #!/usr/bin/env python3
 import argparse
+import traceback
 
-import loader
-import launcher
+from targets.MT6765 import MT6765
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="wmt_pyloader", description="Mediatek WiFi Loader"
     )
-    parser.add_argument(
-        "--skip-loader",
-        action="store_true",
-        default=False,
-        dest="skip_loader",
-        help="Do not perform Loader step",
-    )
+    # TODO: For now arguments are unused as there's one target.
     args = parser.parse_args()
+    _ = args
 
-    if not args.skip_loader:
-        err = loader.do_loader()
-        if err != 0:
-            print(f"wmt_pyloader: Loader step returned err({hex(err)})")
-            return err
+    target = MT6765()
+    try:
+        target.boot()
+    except Exception as e:
+        print("wmt-pyloader: Failed to boot network:", e)
+        traceback.print_exception(e)
 
-    err = launcher.do_launcher()
-    if err != 0:
-        print(f"wmt_pyloader: Launcher step returned err({hex(err)})")
-        return err
-
-    print("wmt_pyloader: Done!")
     return 0
 
 

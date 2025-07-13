@@ -58,6 +58,7 @@ class WMTCHIN:
 
 
 WMT_DEV = "/dev/stpwmt"
+WMT_WIFI = "/dev/wmtWifi"
 WMT_COMAMND_SRH_PATCH = b"srh_patch"
 WMT_COMMAND_SRH_ROM_PATCH = b"srh_rom_patch"
 ROM_PREFIXES = {
@@ -230,6 +231,8 @@ class Launcher:
         t.start()
         t = threading.Thread(target=self._launcher_response_thread)
         t.start()
+        t = threading.Thread(target=self._launcher_wifi_enable_thread)
+        t.start()
 
         return 0
 
@@ -266,6 +269,22 @@ class Launcher:
                 traceback.print_exception(e)
             print(f"launcher: response={response}")
             os.write(self.fd, response)
+
+    def _launcher_wifi_enable_thread(self):
+        while True:
+            if not os.path.exists(WMT_WIFI):
+                time.sleep(1.0)
+                continue
+            try:
+                with open(WMT_WIFI, "wt") as f:
+                    f.write("1")
+
+                print("launcher: WiFi enabled")
+                return
+            except Exception as e:
+                print("WARNING: Failed to enable WiFi:", e)
+                traceback.print_exception(e)
+                time.sleep(1.0)
 
     def _handle_launcher_cmd(self, cmd: bytes):
         print(f"launcher: Handling command={cmd}")
