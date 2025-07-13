@@ -4,7 +4,7 @@ Work in progress, reverse-engineered, Python reimplementation of the `wmt_loader
 The script performs some work required to initialize the WiFi hardware on non-Android systems (such as [postmarketOS](https://postmarketos.org/)).
 
 The goal of this project is to possibly have `wmt-pyloader` be usable as a generic replacement for the WiFi initialization executables across different MTK SoCs/WiFi HW.
-This may be too optimistic, and for now the script only re-implements some of the logic done by the `wmt_loader` executable for an MT8768T target (or more precisely: SM-T225 / samsung-gta7litewifi tablet).
+This may be too optimistic, so for now the script is focusing on supporting MT6765-based targets.
 
 # Supported initialization methods
 
@@ -15,39 +15,20 @@ There seem to be other methods of initialization as well (UART, SDIO?), which th
 # Supported SoCs
 
 - MT8768T
+- Hopefully should work on other MT6765-based SoCs? Contributions welcome, even if just to say that it doesn't work on your particular device!
 
 # Running
 
 Python 3 is required, without any additional dependencies.
-Simply run the script as root on the target:
+Copy the sources to the target and run the script as root:
 ```bash
 sudo <path-to-wmt-pyloader.py>
 ```
 
 # Current progress
 
-All testing is done on a SM-T225 tablet running postmarketOS.
-Running the script causes `/dev/wmtWifi` to appear, trying to enable it by running `echo 1 > /dev/wmtWifi` initially appears to work but fails after a timeout with:
-```
-[  229.608017]  (6)[3657:sh][HIF-SDIO][D]wmt_lib_put_act_op:osal_wait_for_signal_timeout:994
-[  229.608052]  (6)[3657:sh][HIF-SDIO][W]wmt_lib_put_act_op:opId(3) result:-3
-[  229.608089]  (6)[3657:sh][WMT-PLAT][D]wmt_plat_wake_lock_ctrl:WMT-PLAT: after wake_unlock(0), counter(0)
-[  229.608125]  (6)[3657:sh][HIF-SDIO][W]mtk_wcn_wmt_func_ctrl:OPID(3) type(3) fail
-[  229.608147]  (6)[3657:sh][MTK-WIFI] WIFI_write[E]: WMT turn on WIFI fail!
-```
-Currently unsure if this is caused by some initialization step missing, or if the kernel modules are somehow built incorrectly.
-
-# Chain of initialization
-
-Rough chain of initialization of the WiFi hardware on SM-T225:
-
-1. *load wmt_drv module*
-1. **wmt_loader**   <- partially reimplemented by wmt-pyloader
-1. *load wmt_chrdev_wifi module*
-1. *load wlan_drv_gen4m module*
-1. **wlan_assistant**   <- writes NVRAM to `/dev/wmtWifi`, could theoretically be done by wmt-pyloader as well
-
-The out-of-tree modules for this target can be found here: https://codeberg.org/lowendlibre/mt8768-modules
+`wmt-pyloader` can successfully initialize WiFi on a MT8768T-based device using MediaTek's out-of-tree connectivity modules.
+FM/GPS/Bluetooth have not been investigated yet.
 
 # Source of truth
 
