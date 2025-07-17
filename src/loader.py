@@ -1,6 +1,9 @@
 from ioctl import do_ioctl, ior, iow
 import os
 import struct
+import logformat
+
+logger = logformat.get_logger()
 
 
 DETECT_NODE = "/dev/wmtdetect"
@@ -32,7 +35,7 @@ def do_loader() -> int:
     try:
         fd = open(DETECT_NODE, "wb")
     except:
-        print(f"Loader: Failed to open {DETECT_NODE}")
+        logger.error(f"Failed to open {DETECT_NODE}")
         return 1
 
     # HW initialization
@@ -44,7 +47,7 @@ def do_loader() -> int:
         # For my SM-T225, the persist.vendor.connsys.chipid is -1, so this branch is irrelevant
         # But it actually does some ioctl's within here when it finds a match, so other devices
         # could require those ioctl's to function.
-        print(f"FIXME: Unimplemented branch ioctl(0x8004770a) with err(0)")
+        logger.warning("Unimplemented branch ioctl(0x8004770a) with err(0)")
 
     chipid = None
     is_inited = False
@@ -54,22 +57,22 @@ def do_loader() -> int:
         # Chip power on
         err = do_ioctl(fd, COMBO_IOCTL_EXT_CHIP_PWR_ON)
         if err == 0:
-            print(f"FIXME: Unimplemented branch ioctl(0x8004770a) with err({err})")
+            logger.error(f"Unimplemented branch ioctl(0x8004770a) with err({err})")
             fd.close()
             return 1
         else:
             if err != -1:
-                print(f"wmt_pyloader: External combo power-on failed with err({err})")
+                logger.error(f"External combo power-on failed with err({err})")
                 fd.close()
                 return 1
 
             is_inited = True
             chip_id_ioctl = COMBO_IOCTL_GET_SOC_CHIP_ID
-            print("wmt_pyloader: SOC chip no need do combo chip power on")
+            logger.debug("SOC chip no need do combo chip power on")
 
         # Read chip ID
         chipid = do_ioctl(fd, chip_id_ioctl, 0) & 0xFFFFFFFF
-        print(f"wmt_pyloader: Detected chip ID: {hex(chipid)}")
+        logger.info(f"Detected chip ID: {hex(chipid)}")
 
         if is_inited:
             break
@@ -81,18 +84,18 @@ def do_loader() -> int:
         # What does this even mean?
         err = do_ioctl(fd, COMBO_IOCTL_DO_SDIO_AUDOK, chipid)
         if err != 0:
-            print("wmt_pyloader: 'do SDIO3.0 autok' failed!")
+            logger.error(f"COMBO_IOCTL_DO_SDIO_AUDOK ioctl failed with err({err})")
             fd.close()
             return 1
-        print("wmt_pyloader: SDIO3.0 autok done")
+        logger.debug("SDIO3.0 autok done")
 
         # "external combo chip power off"
         err = do_ioctl(fd, COMBO_IOCTL_EXT_CHIP_PWR_OFF)
         if err != 0:
-            print("wmt_pyloader: External combo chip power off failed")
+            logger.error("External combo chip power off failed")
             fd.close()
             return 1
-        print("wmt_pyloader: External combo chip power off done")
+        logger.info("External combo chip power off done")
 
     err = do_ioctl(fd, COMBO_IOCTL_SET_CHIP_ID, chipid & 0xFFFFFFFF)
     chip_type = identify_chip_type_magic(err, chipid & 0xFFFFFFFF)
@@ -100,29 +103,27 @@ def do_loader() -> int:
     persist_vendor_connsys_chipid = chipid & 0xFFFFFFFF
     if chip_type is None:
         # Doesn't look fatal?
-        print(f"wmt_pyloader: Invalid loaderfd: {hex(err)}")
+        logger.warning(f"Invalid loaderfd: {hex(err)}")
     else:
         err = do_ioctl(fd, COMBO_IOCTL_MODULE_CLEANUP, chip_type)
         if err == 0:
             err = do_ioctl(fd, COMBO_IOCTL_DO_MODULE_INIT, chip_type)
             if err == 0:
-                print("wmt_pyloader: COMBO_IOCTL_DO_MODULE_INIT success!")
+                logger.info("COMBO_IOCTL_DO_MODULE_INIT success!")
             else:
-                print(f"wmt_pyloader: COMBO_IOCTL_DO_MODULE_INIT failed: err{hex(err)}")
+                logger.warning(f"COMBO_IOCTL_DO_MODULE_INIT failed: err{hex(err)}")
         else:
-            print(
-                f"wmt_pyloader: COMBO_IOCTL_MODULE_CLEANUP call failed: err({hex(err)})"
-            )
+            logger.warning(f"COMBO_IOCTL_MODULE_CLEANUP call failed: err({hex(err)})")
 
     adie_chipid = do_ioctl(fd, COMBO_IOCTL_GET_ADIE_CHIP_ID, 0)
     if adie_chipid == -1:
-        print(f"wmt_pyloader: Get ADIE chip ID failed: err({hex(adie_chipid)})")
+        logger.error(f"Get ADIE chip ID failed: err({hex(adie_chipid)})")
         fd.close()
         return 1
 
     fd.close()
 
-    print(f"wmt_pyloader: ADIE chip ID: {hex(adie_chipid)}")
+    logger.info(f"ADIE chip ID: {hex(adie_chipid)}")
 
     return 0
 
@@ -143,7 +144,7 @@ def identify_chip_type_magic(err: int, chipid: int):
             return fallback
         else:
             if err == -1:
-                print(f"wmt_pyloader: Chip ID error: err({hex(err)})")
+                logger.error(f"Chip ID error: err({hex(err)})")
                 return None
             if err in [0x279]:
                 return 0x6797
