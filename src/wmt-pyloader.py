@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import logformat
+import kmsg
 
 from targets.MT6765 import MT6765
 
@@ -14,6 +15,8 @@ def main() -> int:
     # TODO: For now arguments are unused as there's one target.
     args = parser.parse_args()
     _ = args
+
+    kmsg.start_listener()
 
     target = MT6765()
     try:
