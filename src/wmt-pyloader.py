@@ -19,6 +19,7 @@ def main() -> int:
     except Exception as e:
         print("wmt-pyloader: Failed to boot network:", e)
         traceback.print_exception(e)
+        return 1
 
     return 0
 
