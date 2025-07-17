@@ -123,16 +123,6 @@ def do_loader() -> int:
     fd.close()
 
     print(f"wmt_pyloader: ADIE chip ID: {hex(adie_chipid)}")
-    try:
-        os.chown(PROC_WMT_DBG, 2000, 1000)
-    except Exception as e:
-        print(f"wmt_pyloader: chown({PROC_WMT_DBG}, 2000, 1000) failed: {e}")
-        return 1
-    try:
-        os.chown(PROC_WMT_AEE, 2000, 1000)
-    except Exception as e:
-        print(f"wmt_pyloader: chown({PROC_WMT_AEE}, 2000, 1000) failed: {e}")
-        return 1
 
     return 0
 
