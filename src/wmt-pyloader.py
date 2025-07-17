@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
-import traceback
+import logformat
 
 from targets.MT6765 import MT6765
+
+logger = logformat.get_logger()
 
 
 def main() -> int:
@@ -17,8 +19,7 @@ def main() -> int:
     try:
         target.boot()
     except Exception as e:
-        print("wmt-pyloader: Failed to boot network:", e)
-        traceback.print_exception(e)
+        logger.exception("Failed to boot network")
         return 1
 
     return 0
