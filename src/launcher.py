@@ -5,6 +5,9 @@ import threading
 import traceback
 from typing import Optional
 import patch
+import logformat
+
+logger = logformat.get_logger()
 
 
 from ioctl import do_ioctl, ior, iow, iowr
@@ -188,27 +191,27 @@ class Launcher:
     def run(self) -> int:
         self.fd = os.open(WMT_DEV, os.O_CREAT | os.O_RDWR)
         if self.fd < 0:
-            print(f"Failed to open {WMT_DEV}")
-            print(f"Hint: {WMT_DEV} appears after performing the Loader step.")
+            logger.error(f"Failed to open {WMT_DEV}")
+            logger.error(f"Hint: {WMT_DEV} appears after performing the Loader step.")
             return 1
 
         while True:
             chipid = do_ioctl(self.fd, WMT_IOCTL_WMT_QUERY_CHIPID)
             if chipid != -1:
                 break
-            print(f"Launcher: WMT_IOCTL_WMT_QUERY_CHIPID failed! Retrying in 300ms..")
+            logger.warning(f"WMT_IOCTL_WMT_QUERY_CHIPID failed! Retrying in 300ms..")
             time.sleep(0.3)
             continue
-        print(f"Launcher: Chip ID={hex(chipid)}")
-        fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMTCHIN.MAPPINGHWVER)
-        print(f"Launcher: Firmware Version={hex(fwver)}")
+        logger.info(f"Chip ID={hex(chipid)}")
+        hwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMTCHIN.MAPPINGHWVER)
+        logger.info(f"HW Version={hex(hwver)}")
 
         weird_chip_id = (chipid - 0x6620) >> 1
         check_id = weird_chip_id | (chipid << 0x1F)
-        print(f"check_id: {hex(check_id)}")
+        logger.debug(f"check_id: {hex(check_id)}")
         if check_id < 10 and ((1 << (chipid) & 0x1F) & 0x311) != 0:
             stp_mode = 4
-            print("wmt_pyloader: FIXME: Unimplemented branch!")
+            logger.error("FIXME: Unimplemented branch!")
             return 1
         else:
             stp_mode = 3
@@ -219,7 +222,7 @@ class Launcher:
         patch_path = "/lib/firmware"
 
         if patch_path is None:
-            print("wmt_pyloader: FIXME: Unimplemented branch! patch_path == null")
+            logger.error("FIXME: Unimplemented branch! patch_path == null")
             return 1
 
         config = (baudrate << 8) | ((fm_mode & 0xF) << 4) | (stp_mode & 0xF)
@@ -243,17 +246,17 @@ class Launcher:
         while count < 0x14:
             err = do_ioctl(self.fd, WMT_IOCTL_LPBK_POWER_CTRL, magic_value)
             if err == 0:
-                print("Power-on completed, closing..")
+                logger.info("Power-on completed, closing..")
                 break
             do_ioctl(self.fd, WMT_IOCTL_LPBK_POWER_CTRL, 0)
-            print(f"Power-on failed! Retrying in 1s...")
+            logger.warning(f"Power-on failed! Retrying in 1s...")
             time.sleep(1.0)
             count += 1
 
     def _launcher_response_thread(self):
         import select
 
-        print("launcher: Waiting for patch requests..")
+        logger.info("Waiting for patch requests..")
         while True:
             r, _, _ = select.select([self.fd], [], [])
             if self.fd not in r:
@@ -264,10 +267,9 @@ class Launcher:
             try:
                 self._handle_launcher_cmd(data)
                 response = b"ok"
-            except Exception as e:
-                print("WARNING: Command handling failed with:", e)
-                traceback.print_exception(e)
-            print(f"launcher: response={response}")
+            except:
+                logger.exception("Command handling failed")
+            logger.debug(f"response={response}")
             os.write(self.fd, response)
 
     def _launcher_wifi_enable_thread(self):
@@ -279,15 +281,14 @@ class Launcher:
                 with open(WMT_WIFI, "wt") as f:
                     f.write("1")
 
-                print("launcher: WiFi enabled")
+                logger.info("WiFi enabled!")
                 return
-            except Exception as e:
-                print("WARNING: Failed to enable WiFi:", e)
-                traceback.print_exception(e)
+            except:
+                logger.exception("Failed to enable WiFi, retrying in 1s...")
                 time.sleep(1.0)
 
     def _handle_launcher_cmd(self, cmd: bytes):
-        print(f"launcher: Handling command={cmd}")
+        logger.debug(f"Handling command={cmd}")
         if cmd == WMT_COMMAND_SRH_ROM_PATCH:
             self._handle_srh_rom_patch()
         elif cmd == WMT_COMAMND_SRH_PATCH:
@@ -298,28 +299,28 @@ class Launcher:
     def _handle_srh_rom_patch(self):
         chip_id = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_CHIPID)
         fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_FWVER)
-        print(f"srh_rom_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
+        logger.debug(f"srh_rom_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
 
         prefix = get_rom_patch_prefix(chip_id)
         suffix = get_patch_suffix(chip_id)
         patchglob = f"{prefix}_ram_*_{suffix}*"
-        print(f"srh_rom_patch: Looking for patch using glob: {patchglob}")
+        logger.info(f"srh_rom_patch: Looking for patch using glob: {patchglob}")
 
         patches = patch.patchglob(patchglob)
         for p in patches:
             if "ram_bt" in p.filename:
                 btver = patch.find_bluetooth_fw_ver(p.contents)
-                print("srh_rom_patch: BT firmware version:", btver)
+                logger.debug(f"srh_rom_patch: BT firmware version: {btver}")
             else:
-                print(
-                    "srh_rom_patch: Patch build:", patch.get_patch_build_id(p.contents)
+                logger.debug(
+                    f"srh_rom_patch: Patch build: {patch.get_patch_build_id(p.contents)}"
                 )
 
-            print(f"srh_rom_patch: Read patch file length: {len(p.contents)}")
+            logger.debug(f"srh_rom_patch: Read patch file length: {len(p.contents)}")
             patchinfo = patch.get_patch_info(p.contents)
             patchver = patch.get_patch_fwver(p.contents)
-            print(f"srh_rom_patch: patchinfo={patchinfo}")
-            print(f"srh_rom_patch: patchver={patchver}")
+            logger.debug(f"srh_rom_patch: patchinfo={patchinfo}")
+            logger.debug(f"srh_rom_patch: patchver={patchver}")
             if patchver != fwver:
                 raise Exception(
                     f"Patch version mismatch... expected {patchver} got {fwver}"
@@ -335,21 +336,21 @@ class Launcher:
     def _handle_srh_patch(self):
         chip_id = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_CHIPID)
         fwver = do_ioctl(self.fd, WMT_IOCTL_GET_CHIP_INFO, WMT_CHIPINFO_GET_FWVER)
-        print(f"srh_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
+        logger.debug(f"srh_patch: chip_id={hex(chip_id)} fw_ver={hex(fwver)}")
 
         prefix = f"{get_patch_prefix(chip_id)}_patch"
         suffix = get_patch_suffix(chip_id)
 
         patchglob = f"{prefix}*{suffix}*"
-        print(f"srh_patch: Looking for patch using glob: {patchglob}")
+        logger.info(f"srh_patch: Looking for patch using glob: {patchglob}")
 
         patch_count_set = False
         patches = patch.patchglob(patchglob)
         for p in patches:
             patchinfo = patch.get_patch_info(p.contents)[:4]
             patchver = patch.get_patch_fwver(p.contents)
-            print(f"srh_patch: patchinfo={patchinfo}")
-            print(f"srh_patch: patchver={patchver}")
+            logger.debug(f"srh_patch: patchinfo={patchinfo}")
+            logger.debug(f"srh_patch: patchver={patchver}")
             if patchver != fwver:
                 raise Exception(
                     f"Patch version mismatch... expected {patchver} got {fwver}"
