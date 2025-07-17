@@ -1,3 +1,7 @@
+import logformat
+
+logger = logformat.get_logger()
+
 _IOC_NRSHIFT = 0
 _IOC_TYPESHIFT = 8
 _IOC_SIZESHIFT = 16
@@ -47,7 +51,7 @@ def do_ioctl(fd, ioctl: int, arg: int | bytes = 0) -> int:
     except OSError as e:
         err = -e.errno
     if isinstance(err, bytes):
-        print(f"wmt_pyloader: ioctl({hex(ioctl)}) bytes: {err}")
+        logger.debug(f"ioctl({hex(ioctl)}) bytes: {err}")
         return err
-    print(f"wmt_pyloader: ioctl({hex(ioctl)}) returned err({hex(err)})")
+    logger.debug(f"ioctl({hex(ioctl)}) returned err({hex(err)})")
     return err
